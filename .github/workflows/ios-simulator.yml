@@ -1,0 +1,89 @@
+name: iOS Simulator build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Build iOS (simulator, debug)
+        run: flutter build ios --simulator --debug
+
+      - name: Zip Runner.app
+        run: |
+          cd build/ios/iphonesimulator
+          ditto -c -k --sequesterRsrc --keepParent Runner.app "$GITHUB_WORKSPACE/Runner.app.zip"
+          ls -lh "$GITHUB_WORKSPACE/Runner.app.zip"
+
+      # Docs: https://docs.appetize.io/rest-api/v1/direct-file-uploads
+      #   novo app:  POST https://api.appetize.io/v1/apps            (-F file=@... -F platform=ios)
+      #   atualizar: POST https://api.appetize.io/v1/apps/PUBLICKEY  (mesmos campos)
+      - name: Upload to Appetize
+        env:
+          APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
+          APPETIZE_PUBLIC_KEY: ${{ secrets.APPETIZE_PUBLIC_KEY }}
+        run: |
+          : > appetize_url.txt
+          : > appetize_public_key.txt
+          if [ -z "$APPETIZE_API_TOKEN" ]; then
+            echo "::notice::Secret APPETIZE_API_TOKEN ausente - pulando upload. Baixe o artifact e envie Runner.app.zip manualmente em https://appetize.io/upload"
+            exit 0
+          fi
+
+          upload() {
+            curl -sS -o resp.json -w '%{http_code}' -X POST "$1" \
+              -H "X-API-KEY: $APPETIZE_API_TOKEN" \
+              -F "file=@Runner.app.zip" \
+              -F "platform=ios" \
+              -F "note=${GITHUB_REPOSITORY}@${GITHUB_SHA::7} run ${GITHUB_RUN_NUMBER}"
+          }
+
+          code=000
+          if [ -n "$APPETIZE_PUBLIC_KEY" ]; then
+            echo "Atualizando app existente $APPETIZE_PUBLIC_KEY"
+            code=$(upload "https://api.appetize.io/v1/apps/$APPETIZE_PUBLIC_KEY")
+            if [ "$code" != "200" ]; then
+              echo "::warning::Update falhou (HTTP $code): $(cat resp.json). Criando app novo."
+            fi
+          fi
+          if [ "$code" != "200" ]; then
+            code=$(upload "https://api.appetize.io/v1/apps")
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::error::Upload Appetize falhou (HTTP $code): $(cat resp.json)"
+            exit 1
+          fi
+
+          pk=$(jq -r '.publicKey' resp.json)
+          url="https://appetize.io/app/$pk"
+          echo "$url" > appetize_url.txt
+          echo "$pk" > appetize_public_key.txt
+          echo "Appetize: $url (versionCode $(jq -r '.versionCode' resp.json))"
+          echo "### 📱 iOS Simulator no Appetize: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-simulator-build
+          path: |
+            Runner.app.zip
+            appetize_url.txt
+            appetize_public_key.txt
+          retention-days: 7
