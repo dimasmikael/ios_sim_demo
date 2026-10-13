@@ -32,6 +32,14 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent Runner.app "$GITHUB_WORKSPACE/Runner.app.zip"
           ls -lh "$GITHUB_WORKSPACE/Runner.app.zip"
 
+      # Publica o zip antes do upload, para ficar disponivel mesmo se o Appetize falhar
+      - name: Publish artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-simulator-build
+          path: Runner.app.zip
+          retention-days: 7
+
       # Docs: https://docs.appetize.io/rest-api/v1/direct-file-uploads
       #   novo app:  POST https://api.appetize.io/v1/apps            (-F file=@... -F platform=ios)
       #   atualizar: POST https://api.appetize.io/v1/apps/PUBLICKEY  (mesmos campos)
@@ -78,10 +86,12 @@ jobs:
           echo "Appetize: $url (versionCode $(jq -r '.versionCode' resp.json))"
           echo "### 📱 iOS Simulator no Appetize: $url" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish artifact
+      # Republica com o link do Appetize (lido pelo ios-preview.ps1)
+      - name: Publish artifact with Appetize info
         uses: actions/upload-artifact@v7
         with:
           name: ios-simulator-build
+          overwrite: true
           path: |
             Runner.app.zip
             appetize_url.txt
